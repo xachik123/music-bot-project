@@ -5,7 +5,7 @@ import hmac
 from urllib.parse import parse_qsl
 import yt_dlp
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -14,9 +14,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "playlists.json"
 USERS_FILE = "users.json"
 
-# --- НАСТРОЙКИ ДОСТУПА ---
-FREE_MAX_PLAYLISTS = 999  # Пока 999 (безлимит). Потом поставим 2 или 3.
-ADMIN_ID = "твой_telegram_id" # СЮДА ВПИШИ СВОЙ ID (узнать можно у бота @userinfobot)
+FREE_MAX_PLAYLISTS = 999
+ADMIN_ID = "твой_telegram_id" 
 
 app = FastAPI()
 
@@ -43,18 +42,14 @@ def get_user_info(request: Request):
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user = validate_init_data(init_data)
     
-    # Если это локальный тест в браузере
     if not user:
         return {"id": "local_test_user", "status": "vip"}
 
     user_id = str(user.get("id"))
     username = user.get("username", "unknown")
-    
-    # Проверяем базу пользователей
     users_db = load_json(USERS_FILE)
     
     if user_id not in users_db:
-        # Если пользователь зашел впервые, регистрируем его
         status = "vip" if user_id == ADMIN_ID else "free"
         users_db[user_id] = {"username": username, "status": status}
         save_json(USERS_FILE, users_db)
@@ -69,18 +64,18 @@ class StreamRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
-    with open("index.html", "r", encoding="utf-8") as f:
-        return f.read()
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, "index.html")
+    if os.path.exists(file_path):
+        return FileResponse(file_path)
+    return "ОШИБКА: Файл index.html не найден на сервере!"
 
 @app.get("/api/playlists")
 async def get_playlists(request: Request):
     user = get_user_info(request)
     data = load_json(DATA_FILE)
     playlists = data.get(user["id"], [])
-    
-    # Проверяем, не превышен ли лимит (вернем флаг на фронтенд)
     can_add = user["status"] == "vip" or len(playlists) < FREE_MAX_PLAYLISTS
-    
     return {"playlists": playlists, "status": user["status"], "can_add": can_add}
 
 @app.post("/api/playlist")
@@ -89,9 +84,8 @@ async def add_playlist(req: PlaylistAddRequest, request: Request):
     data = load_json(DATA_FILE)
     user_playlists = data.get(user["id"], [])
 
-    # Защита на бэкенде
     if user["status"] != "vip" and len(user_playlists) >= FREE_MAX_PLAYLISTS:
-        raise HTTPException(status_code=403, detail="Лимит бесплатных плейлистов исчерпан. Оформите VIP!")
+        raise HTTPException(status_code=403, detail="Лимит бесплатных плейлистов исчерпан.")
 
     try:
         ydl_opts = {"quiet": True, "no_warnings": True, "extract_flat": True}

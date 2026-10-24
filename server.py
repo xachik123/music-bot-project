@@ -13,7 +13,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "playlists.json"
 USERS_FILE = "users.json"
-
 FREE_MAX_PLAYLISTS = 999
 ADMIN_ID = "твой_telegram_id" 
 
@@ -41,19 +40,15 @@ def validate_init_data(init_data: str):
 def get_user_info(request: Request):
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user = validate_init_data(init_data)
-    
     if not user:
         return {"id": "local_test_user", "status": "vip"}
-
     user_id = str(user.get("id"))
     username = user.get("username", "unknown")
     users_db = load_json(USERS_FILE)
-    
     if user_id not in users_db:
         status = "vip" if user_id == ADMIN_ID else "free"
         users_db[user_id] = {"username": username, "status": status}
         save_json(USERS_FILE, users_db)
-        
     return {"id": user_id, "status": users_db[user_id]["status"], "username": username}
 
 class PlaylistAddRequest(BaseModel):
@@ -62,13 +57,15 @@ class PlaylistAddRequest(BaseModel):
 class StreamRequest(BaseModel):
     url: str
 
+# --- ВОТ ГЛАВНАЯ СТРАНИЦА ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(base_dir, "index.html")
     if os.path.exists(file_path):
         return FileResponse(file_path)
-    return "ОШИБКА: Файл index.html не найден на сервере!"
+    return "ФАЙЛ index.html НЕ НАЙДЕН НА СЕРВЕРЕ!"
+# ----------------------------
 
 @app.get("/api/playlists")
 async def get_playlists(request: Request):
@@ -83,25 +80,20 @@ async def add_playlist(req: PlaylistAddRequest, request: Request):
     user = get_user_info(request)
     data = load_json(DATA_FILE)
     user_playlists = data.get(user["id"], [])
-
     if user["status"] != "vip" and len(user_playlists) >= FREE_MAX_PLAYLISTS:
-        raise HTTPException(status_code=403, detail="Лимит бесплатных плейлистов исчерпан.")
-
+        raise HTTPException(status_code=403, detail="Лимит исчерпан.")
     try:
         ydl_opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(req.url, download=False)
-
         if "entries" not in info:
             raise HTTPException(status_code=400, detail="Это не плейлист")
-
         tracks = []
         for i, entry in enumerate(info["entries"]):
             if not entry: continue
             track_url = entry.get("url") or entry.get("webpage_url", "")
             title = entry.get("title")
             artist = entry.get("uploader") or entry.get("artist")
-
             if not title or title.isdigit() or title.lower() == "unknown":
                 if "soundcloud.com" in track_url:
                     parts = track_url.split('/')
@@ -111,23 +103,16 @@ async def add_playlist(req: PlaylistAddRequest, request: Request):
                     elif len(parts) >= 5 and parts[3] == "tracks":
                         artist = "SoundCloud"
                         title = f"Трек (ID: {parts[4]})"
-
             tracks.append({
-                "id": i,
-                "title": title or "Без названия",
-                "artist": artist or "Неизвестен",
-                "url": track_url,
-                "thumbnail": entry.get("thumbnail", ""),
-                "duration": entry.get("duration", 0),
+                "id": i, "title": title or "Без названия", "artist": artist or "Неизвестен",
+                "url": track_url, "thumbnail": entry.get("thumbnail", ""), "duration": entry.get("duration", 0),
             })
-
         playlist_data = {"title": info.get("title", "Плейлист"), "tracks": tracks}
         data.setdefault(user["id"], []).append(playlist_data)
         save_json(DATA_FILE, data)
-        
         return {"success": True, "playlist": playlist_data}
-    except HTTPException: raise
-    except Exception as e: raise HTTPException(status_code=400, detail=f"Ошибка: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка: {str(e)}")
 
 @app.delete("/api/playlist/{playlist_idx}")
 async def delete_playlist(playlist_idx: int, request: Request):
@@ -149,7 +134,7 @@ async def get_stream(req: StreamRequest):
             if not stream_url:
                 for f in info.get("formats", []):
                     if f.get("url"): stream_url = f["url"]; break
-            if not stream_url: raise HTTPException(status_code=404, detail="Не удалось найти поток")
+            if not stream_url: raise HTTPException(status_code=404, detail="Не найден поток")
             return {"stream_url": stream_url}
-    except HTTPException: raise
-    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

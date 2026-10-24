@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Музыка</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+    body { font-family: sans-serif; padding: 16px; background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); margin: 0; }
+    #app { max-width: 600px; margin: 0 auto; padding-bottom: 150px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    input { width: 100%; padding: 12px; margin-bottom: 10px; box-sizing: border-box; border-radius: 8px; border: 1px solid #ccc; }
+    button { padding: 12px 16px; cursor: pointer; border-radius: 8px; border: none; background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); font-size: 15px; margin: 4px 4px 4px 0; }
+    button.secondary { background: #888; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    
+    .user-badge { font-size: 12px; padding: 4px 8px; border-radius: 4px; font-weight: bold; margin-bottom: 10px; display: inline-block; }
+    .badge-vip { background: gold; color: #000; }
+    .badge-free { background: #e0e0e0; color: #333; }
+
+    #playlists { list-style: none; padding: 0; }
+    #playlists li { display: flex; justify-content: space-between; align-items: center; padding: 14px; background: var(--tg-theme-secondary-bg-color, #f0f0f0); margin-bottom: 8px; border-radius: 8px; }
+    #playlists li span { cursor: pointer; flex-grow: 1; font-weight: bold; }
+    .btn-delete { background: #e74c3c; padding: 8px 12px; margin: 0; font-size: 14px; }
+    
+    #track-list { list-style: none; padding: 0; }
+    #track-list li { padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; align-items: center; }
+    #track-list li.playing { background: #d4edda; color: #155724; font-weight: bold; }
+    
+    .player-controls { display: flex; gap: 10px; margin-bottom: 10px; }
+    .toggle-btn { background: #555; font-size: 14px; padding: 8px 12px; }
+    .toggle-btn.active { background: #f39c12; }
+    
+    #player { position: fixed; bottom: 0; left: 0; right: 0; background: var(--tg-theme-secondary-bg-color, #f0f0f0); padding: 10px; box-sizing: border-box; border-top: 1px solid #ddd; }
+    #loading { text-align: center; padding: 20px; color: #888; }
+    .control-btns { display: flex; justify-content: center; gap: 15px; margin-top: 10px; }
+    .control-btns button { padding: 10px 20px; font-size: 18px; background: #333; }
+</style>
+</head>
+<body>
+<div id="app">
+    <div id="profile-screen" class="screen active">
+        <div id="user-status-badge" class="user-badge">Загрузка...</div>
+        <h2>Мои плейлисты</h2>
+        <button id="add-btn" onclick="showAddScreen()">➕ Добавить плейлист</button>
+        <div id="loading" style="display:none">Загрузка...</div>
+        <ul id="playlists"></ul>
+    </div>
+
+    <div id="add-screen" class="screen">
+        <h2>Добавить плейлист</h2>
+        <input type="text" id="playlist-url" placeholder="Вставь ссылку на плейлист SoundCloud">
+        <button onclick="addPlaylist()">Добавить</button>
+        <button class="secondary" onclick="showProfileScreen()">Назад</button>
+    </div>
+
+    <div id="player-screen" class="screen">
+        <h2 id="playlist-title"></h2>
+        <div class="player-controls">
+            <button id="shuffle-btn" class="toggle-btn" onclick="toggleShuffle()">➡️ По порядку</button>
+            <button class="secondary" onclick="showProfileScreen()">← Назад</button>
+        </div>
+        <ul id="track-list"></ul>
+    </div>
+</div>
+
+<div id="player" style="display: none;">
+    <audio id="audio-player" controls style="width: 100%;" onended="playNextTrack()"></audio>
+    <div class="control-btns">
+        <button onclick="playPrevTrack()">⏮ Назад</button>
+        <button onclick="playNextTrack()">⏭ Вперёд</button>
+    </div>
+</div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+let currentPlaylist = null;
+let currentTrackIndex = -1;
+let isShuffle = false;
+
+function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+function showProfileScreen() { 
+    showScreen('profile-screen'); 
+    loadPlaylists(); 
+    const audio = document.getElementById('audio-player');
+    if(!audio.paused) audio.pause();
+}
+function showAddScreen() { showScreen('add-screen'); }
+
+async function apiRequest(path, method = 'GET', body = null) {
+    const headers = { 'X-Telegram-Init-Data': tg.initData || '' };
+    if (body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : null });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+}
+
+async function loadPlaylists() {
+    document.getElementById('loading').style.display = 'block';
+    try {
+        const data = await apiRequest('/api/playlists');
+        
+        // Обновляем бейдж статуса
+        const badge = document.getElementById('user-status-badge');
+        if (data.status === 'vip') {
+            badge.textContent = '👑 VIP Аккаунт';
+            badge.className = 'user-badge badge-vip';
+        } else {
+            badge.textContent = 'Бесплатный аккаунт';
+            badge.className = 'user-badge badge-free';
+        }
+
+        // Блокируем кнопку добавления, если лимит исчерпан
+        const addBtn = document.getElementById('add-btn');
+        if (!data.can_add) {
+            addBtn.disabled = true;
+            addBtn.textContent = 'Лимит плейлистов (Купите VIP)';
+        } else {
+            addBtn.disabled = false;
+            addBtn.textContent = '➕ Добавить плейлист';
+        }
+
+        const list = document.getElementById('playlists');
+        list.innerHTML = '';
+        if (!data.playlists.length) {
+            list.innerHTML = '<li style="cursor:default;color:#888;background:none;padding:0;">Пока пусто. Добавь первый плейлист!</li>';
+        }
+        
+        data.playlists.forEach((pl, idx) => {
+            const li = document.createElement('li');
+            const span = document.createElement('span');
+            span.textContent = pl.title + ' (' + pl.tracks.length + ' треков)';
+            span.onclick = () => openPlaylist(pl);
+            
+            const btn = document.createElement('button');
+            btn.className = 'btn-delete';
+            btn.textContent = '🗑';
+            btn.onclick = (e) => { e.stopPropagation(); deletePlaylist(idx); };
+            
+            li.appendChild(span);
+            li.appendChild(btn);
+            list.appendChild(li);
+        });
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    } finally {
+        document.getElementById('loading').style.display = 'none';
+    }
+}
+
+async function deletePlaylist(idx) {
+    if (!confirm('Удалить этот плейлист?')) return;
+    try {
+        await apiRequest('/api/playlist/' + idx, 'DELETE');
+        loadPlaylists();
+    } catch (e) {
+        alert('Ошибка удаления: ' + e.message);
+    }
+}
+
+async function addPlaylist() {
+    const url = document.getElementById('playlist-url').value.trim();
+    if (!url) { alert('Вставь ссылку'); return; }
+    document.getElementById('loading').style.display = 'block';
+    try {
+        await apiRequest('/api/playlist', 'POST', { url });
+        document.getElementById('playlist-url').value = '';
+        showProfileScreen();
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    } finally {
+        document.getElementById('loading').style.display = 'none';
+    }
+}
+
+function openPlaylist(pl) {
+    currentPlaylist = pl;
+    currentTrackIndex = -1;
+    document.getElementById('playlist-title').textContent = pl.title;
+    renderTrackList();
+    showScreen('player-screen');
+}
+
+function renderTrackList() {
+    const list = document.getElementById('track-list');
+    list.innerHTML = '';
+    currentPlaylist.tracks.forEach((t, index) => {
+        const li = document.createElement('li');
+        li.id = 'track-item-' + index;
+        li.textContent = t.artist + ' — ' + t.title;
+        if (index === currentTrackIndex) {
+            li.classList.add('playing');
+            li.textContent = '▶ ' + li.textContent;
+        }
+        li.onclick = () => playTrack(index);
+        list.appendChild(li);
+    });
+}
+
+async function playTrack(index) {
+    if (index < 0 || index >= currentPlaylist.tracks.length) return;
+    
+    const track = currentPlaylist.tracks[index];
+    const audio = document.getElementById('audio-player');
+    const playerDiv = document.getElementById('player');
+    
+    if (currentTrackIndex !== -1) {
+        const oldLi = document.getElementById('track-item-' + currentTrackIndex);
+        if (oldLi) {
+            oldLi.classList.remove('playing');
+            oldLi.textContent = oldLi.textContent.replace('▶ ', '').replace('⏳ ', '');
+        }
+    }
+    
+    currentTrackIndex = index;
+    const newLi = document.getElementById('track-item-' + index);
+    if (newLi) {
+        newLi.classList.add('playing');
+        newLi.textContent = '⏳ ' + track.artist + ' — ' + track.title;
+    }
+
+    try {
+        const data = await apiRequest('/api/stream', 'POST', { url: track.url });
+        playerDiv.style.display = 'block';
+        audio.src = data.stream_url;
+        await audio.play();
+        if (newLi) newLi.textContent = '▶ ' + track.artist + ' — ' + track.title;
+    } catch (e) {
+        alert('Не удалось включить: ' + e.message);
+        if (newLi) {
+            newLi.textContent = track.artist + ' — ' + track.title;
+            newLi.classList.remove('playing');
+        }
+    }
+}
+
+function playNextTrack() {
+    if (!currentPlaylist) return;
+    let nextIndex = isShuffle 
+        ? Math.floor(Math.random() * currentPlaylist.tracks.length)
+        : (currentTrackIndex + 1) % currentPlaylist.tracks.length;
+    playTrack(nextIndex);
+}
+
+function playPrevTrack() {
+    if (!currentPlaylist) return;
+    let prevIndex = currentTrackIndex - 1;
+    if (prevIndex < 0) prevIndex = currentPlaylist.tracks.length - 1;
+    playTrack(prevIndex);
+}
+
+function toggleShuffle() {
+    isShuffle = !isShuffle;
+    const btn = document.getElementById('shuffle-btn');
+    if (isShuffle) {
+        btn.textContent = '🔀 Вразброс';
+        btn.classList.add('active');
+    } else {
+        btn.textContent = '➡️ По порядку';
+        btn.classList.remove('active');
+    }
+}
+
+loadPlaylists();
+</script>
+</body>
+</html>
